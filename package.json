@@ -46,12 +46,20 @@
         "CFBundleDevelopmentRegion": "de",
         "CFBundleLocalizations": [
           "de"
-        ]
+        ],
+        "NSCalendarsFullAccessUsageDescription": "Enhanced for Todoist DE zeigt deine Termine neben deinen Aufgaben und trägt eingeplante Aufgaben in einen Kalender deiner Wahl ein.",
+        "NSCalendarsUsageDescription": "Enhanced for Todoist DE zeigt deine Termine neben deinen Aufgaben und trägt eingeplante Aufgaben in einen Kalender deiner Wahl ein."
       }
     },
     "electronLanguages": [
       "de",
       "en"
+    ],
+    "extraResources": [
+      {
+        "from": "build/native/calhelper",
+        "to": "calhelper"
+      }
     ]
   },
   "productName": "Enhanced for Todoist DE"

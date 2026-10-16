@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>fr.julesbertolino.todoistenhanced.desktop.de.calhelper</string>
+  <key>CFBundleName</key>
+  <string>Enhanced for Todoist DE</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Enhanced for Todoist DE zeigt deine Termine neben deinen Aufgaben und trägt eingeplante Aufgaben in einen Kalender deiner Wahl ein.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Enhanced for Todoist DE zeigt deine Termine neben deinen Aufgaben und trägt eingeplante Aufgaben in einen Kalender deiner Wahl ein.</string>
+</dict>
+</plist>
