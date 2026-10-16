@@ -165,6 +165,7 @@ let main = null;
 let quick = null;
 let quitting = false;
 let mainWasFocused = false;
+let mainWasVisible = false;
 let quickLoadedAt = 0;
 let quickShownAt = 0;
 
@@ -276,6 +277,7 @@ function showQuick() {
   }
   if (!quick) createQuick();
   mainWasFocused = Boolean(main && main.isFocused());
+  mainWasVisible = Boolean(main && main.isVisible() && !main.isMinimized());
   if (quickLoadedAt && Date.now() - quickLoadedAt > QUICK_MAX_AGE_MS) {
     quickLoadedAt = 0;
     quick.webContents.once('did-finish-load', showQuick);
@@ -331,8 +333,13 @@ function hideQuick() {
     if (!quickHiding) return;
     quickHiding = false;
     quick.hide();
-    // Give the keyboard back to the app that was in front, unless this one was.
-    if (process.platform === 'darwin' && !mainWasFocused) {
+    /* Give the keyboard back to the app that was in front, unless this one was.
+       app.hide() versteckt aber alle Fenster der App, also auch ein sichtbares
+       Hauptfenster – das sah aus, als würde die App ins Dock verschwinden.
+       Das Schnellerfassen ist ein Panel (type: 'panel'), das die App beim
+       Öffnen nicht aktiviert: die vorherige App behält den Fokus ohnehin.
+       Verstecken also nur noch, wenn kein Hauptfenster zu sehen war. */
+    if (process.platform === 'darwin' && !mainWasFocused && !mainWasVisible) {
       appHiddenAt = Date.now();
       app.hide();
     }
