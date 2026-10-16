@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('enhancedDesktop', {
     available: () => ipcRenderer.invoke('claude:available'),
     ask: (request) => ipcRenderer.send('claude:ask', request),
     cancel: (requestId) => ipcRenderer.send('claude:cancel', requestId),
+    // Gedächtnis-Einträge, die der Nutzer bestätigt hat, und das Protokoll seiner Entscheidungen.
+    remember: (lines) => ipcRenderer.send('claude:remember', lines),
+    log: (lines) => ipcRenderer.send('claude:log', lines),
     onEvent: (listener) => {
       const handler = (_event, payload) => listener(payload);
       ipcRenderer.on('claude:event', handler);

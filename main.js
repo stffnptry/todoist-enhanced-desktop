@@ -503,25 +503,53 @@ function claudeBinary() {
   }) || null;
 }
 
-/* Eigene Regeln für Claude (regeln.md, frei formuliert, z. B. Planungsgewohnheiten).
-   Zuerst aus iCloud Drive, damit sie auf allen Macs gleich sind, sonst aus dem
-   Datenordner der App. Wird bei jeder Nachricht neu gelesen: Änderungen gelten sofort. */
-const CLAUDE_RULES_FILES = [
-  path.join(os.homedir(), 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'Enhanced for Todoist', 'regeln.md'),
-  path.join(app.getPath('userData'), 'claude', 'regeln.md'),
-];
+/* Claudes Notizen über den Nutzer, als Markdown im Projektordner (liegt in
+   ~/Documents, das iCloud auf alle Macs bringt); fehlt der Ordner, im Datenordner
+   der App. Alle werden bei jeder Nachricht neu gelesen: Änderungen gelten sofort.
+   - regeln.md: schreibt nur der Nutzer selbst.
+   - gedaechtnis.md: was Claude sich merken soll; Claude schlägt Einträge nur vor,
+     geschrieben wird erst, wenn der Nutzer „merken“ klickt (claude:remember).
+   - claude-protokoll.md: welche Vorschläge übernommen oder abgelehnt wurden
+     (claude:log), damit Claude Muster erkennen kann. */
+const PROJECT_DIR = path.join(os.homedir(), 'Documents', 'Claude', 'Coding', 'macOS', 'Enhanced-for-Todoist-DE');
+const claudeNotesDir = () => (fs.existsSync(PROJECT_DIR) ? PROJECT_DIR : path.join(app.getPath('userData'), 'claude'));
+const MEMORY_HEADER = '# Claudes Gedächtnis\n\nWas Claude beim Planen über dich gelernt hat. Du kannst Einträge jederzeit ändern oder löschen.\n\n';
+const LOG_HEADER = '# Claude-Protokoll\n\nWelche Vorschläge von Claude du übernommen (✓) oder abgelehnt (✗) hast. Wird automatisch gekürzt.\n\n';
 
-function claudeRules() {
-  for (const file of CLAUDE_RULES_FILES) {
+function readNotes(name) {
+  for (const dir of [claudeNotesDir(), path.join(app.getPath('userData'), 'claude')]) {
     try {
-      const text = fs.readFileSync(file, 'utf8').trim();
-      if (text) return text.slice(0, 20_000);
+      const text = fs.readFileSync(path.join(dir, name), 'utf8').trim();
+      if (text) return text;
     } catch {
-      // Datei fehlt oder ist (noch) nicht aus iCloud geladen: nächste versuchen.
+      // Datei fehlt oder ist (noch) nicht aus iCloud geladen: nächsten Ort versuchen.
     }
   }
   return '';
 }
+
+/** Hängt Zeilen an eine Notizdatei an (legt sie mit Überschrift an) und behält höchstens `keep` Einträge. */
+function appendNotes(name, header, lines, keep) {
+  const file = path.join(claudeNotesDir(), name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { text = header; }
+  if (text && !text.endsWith('\n')) text += '\n';
+  text += lines.map((line) => `${line}\n`).join('');
+  if (keep) {
+    const all = text.split('\n');
+    const entries = all.filter((line) => line.startsWith('- '));
+    if (entries.length > keep) text = header + entries.slice(-keep).join('\n') + '\n';
+  }
+  fs.writeFileSync(file, text);
+}
+
+/** Nur kurze Textzeilen aus der Seite annehmen. */
+const cleanLines = (lines, max) => (Array.isArray(lines) ? lines : [])
+  .filter((line) => typeof line === 'string')
+  .map((line) => line.replace(/\s+/g, ' ').trim().slice(0, 500))
+  .filter(Boolean)
+  .slice(0, max);
 
 function claudeAsk(sender, { requestId, message, system, sessionId }) {
   const send = (payload) => { if (!sender.isDestroyed()) sender.send('claude:event', { requestId, ...payload }); };
@@ -537,10 +565,14 @@ function claudeAsk(sender, { requestId, message, system, sessionId }) {
     '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--tools', '', '--strict-mcp-config', '--setting-sources', '',
   ];
-  const rules = claudeRules();
+  const rules = readNotes('regeln.md').slice(0, 20_000);
+  const memory = readNotes('gedaechtnis.md').slice(0, 20_000);
+  const log = readNotes('claude-protokoll.md').split('\n').filter((line) => line.startsWith('- ')).slice(-80).join('\n');
   const prompt = [
     system ? String(system) : '',
     rules ? `Rules from the user (their file regeln.md). Always follow them when planning; they take precedence over the defaults above:\n\n${rules}` : '',
+    memory ? `What you have learned about the user so far (their file gedaechtnis.md; only entries they agreed to). Use it when planning:\n\n${memory}` : '',
+    log ? `The user's recent decisions on your proposals (✓ accepted, ✗ declined), oldest first. Look for patterns in them:\n\n${log}` : '',
   ].filter(Boolean).join('\n\n');
   if (prompt) args.push('--append-system-prompt', prompt);
   if (sessionId && /^[\w-]+$/.test(sessionId)) args.push('--resume', sessionId);
@@ -679,6 +711,16 @@ if (!app.requestSingleInstanceLock()) {
       if (main && event.sender === main.webContents && request && typeof request.requestId === 'string') claudeAsk(event.sender, request);
     });
     ipcMain.on('claude:cancel', (_event, requestId) => claudeRuns.get(requestId)?.kill());
+    ipcMain.on('claude:remember', (event, lines) => {
+      if (!main || event.sender !== main.webContents) return;
+      const clean = cleanLines(lines, 10);
+      if (clean.length) appendNotes('gedaechtnis.md', MEMORY_HEADER, clean.map((line) => `- ${line}`), 0);
+    });
+    ipcMain.on('claude:log', (event, lines) => {
+      if (!main || event.sender !== main.webContents) return;
+      const clean = cleanLines(lines, 50).map((line) => (line.startsWith('- ') ? line : `- ${line}`));
+      if (clean.length) appendNotes('claude-protokoll.md', LOG_HEADER, clean, 500);
+    });
     ipcMain.on('desktop:reminders', (event, list) => {
       if (main && event.sender === main.webContents) scheduleReminders(list);
     });
