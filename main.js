@@ -541,16 +541,21 @@ function claudeBinary() {
   }) || null;
 }
 
-/* Claudes Notizen über den Nutzer, als Markdown im Projektordner (liegt in
-   ~/Documents, das iCloud auf alle Macs bringt); fehlt der Ordner, im Datenordner
-   der App. Alle werden bei jeder Nachricht neu gelesen: Änderungen gelten sofort.
+/* Claudes Notizen über den Nutzer, als Markdown im Projektordner (Git-Clone in
+   ~/Developer; früher ~/Documents in iCloud, das bleibt als Rückfall); fehlt der
+   Ordner, im Datenordner der App. ENHANCED_PROJECT_DIR setzt einen anderen Ort. Alle werden bei jeder Nachricht neu gelesen: Änderungen gelten sofort.
    - regeln.md: schreibt nur der Nutzer selbst.
    - gedaechtnis.md: was Claude sich merken soll; Claude schlägt Einträge nur vor,
      geschrieben wird erst, wenn der Nutzer „merken“ klickt (claude:remember).
    - claude-protokoll.md: welche Vorschläge übernommen oder abgelehnt wurden
      (claude:log), damit Claude Muster erkennen kann. */
-const PROJECT_DIR = path.join(os.homedir(), 'Documents', 'Claude', 'Coding', 'macOS', 'Enhanced-for-Todoist-DE');
-const claudeNotesDir = () => (fs.existsSync(PROJECT_DIR) ? PROJECT_DIR : path.join(app.getPath('userData'), 'claude'));
+const PROJECT_DIRS = [
+  process.env.ENHANCED_PROJECT_DIR,
+  path.join(os.homedir(), 'Developer', 'Enhanced-for-Todoist-DE'),
+  path.join(os.homedir(), 'Documents', 'Claude', 'Coding', 'macOS', 'Enhanced-for-Todoist-DE'),
+].filter(Boolean);
+const claudeNotesDir = () =>
+  PROJECT_DIRS.find((dir) => fs.existsSync(dir)) ?? path.join(app.getPath('userData'), 'claude');
 const MEMORY_HEADER = '# Claudes Gedächtnis\n\nWas Claude beim Planen über dich gelernt hat. Du kannst Einträge jederzeit ändern oder löschen.\n\n';
 const LOG_HEADER = '# Claude-Protokoll\n\nWelche Vorschläge von Claude du übernommen (✓) oder abgelehnt (✗) hast. Wird automatisch gekürzt.\n\n';
 
