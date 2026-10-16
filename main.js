@@ -198,6 +198,35 @@ function guardNavigation(win) {
   });
 }
 
+/**
+ * Rechtsklick in Textfeldern und auf markiertem Text: Ausschneiden, Kopieren,
+ * Einfügen, wie überall auf dem Mac. Electron zeigt von sich aus gar nichts.
+ * Auf Aufgaben, Projekten usw. öffnet die Seite ihr eigenes Menü und
+ * verhindert das Standardereignis – dann kommt hier nichts an.
+ */
+function textContextMenu(win) {
+  win.webContents.on('context-menu', (_event, params) => {
+    const { isEditable, selectionText, editFlags, dictionarySuggestions, misspelledWord } = params;
+    const selected = selectionText.trim() !== '';
+    if (!isEditable && !selected) return;
+    const template = [];
+    if (isEditable && misspelledWord) {
+      for (const word of dictionarySuggestions.slice(0, 4)) {
+        template.push({ label: word, click: () => win.webContents.replaceMisspelling(word) });
+      }
+      if (template.length) template.push({ type: 'separator' });
+    }
+    if (isEditable) template.push({ role: 'cut', label: 'Ausschneiden', enabled: editFlags.canCut });
+    template.push({ role: 'copy', label: 'Kopieren', enabled: editFlags.canCopy });
+    if (isEditable) {
+      template.push({ role: 'paste', label: 'Einfügen', enabled: editFlags.canPaste });
+      template.push({ type: 'separator' });
+      template.push({ role: 'selectAll', label: 'Alles auswählen', enabled: editFlags.canSelectAll });
+    }
+    Menu.buildFromTemplate(template).popup({ window: win });
+  });
+}
+
 function createMain() {
   main = new BrowserWindow({
     width: 1240,
@@ -216,6 +245,7 @@ function createMain() {
     },
   });
   guardNavigation(main);
+  textContextMenu(main);
   main.loadURL(APP_URL);
   /* Schließen blendet das Fenster nur aus: Die Seite liest weiter von Todoist,
      damit die Mitteilungen zu fälligen Aufgaben aktuell bleiben. Beenden
@@ -259,6 +289,7 @@ function createQuick() {
   quick.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
   quick.setAlwaysOnTop(true, 'floating');
   guardNavigation(quick);
+  textContextMenu(quick);
   quick.loadURL(`${APP_URL}${APP_URL.includes('?') ? '&' : '?'}quickadd`);
   quick.webContents.on('did-finish-load', () => { quickLoadedAt = Date.now(); });
   // Like Spotlight: clicking elsewhere puts it away.
