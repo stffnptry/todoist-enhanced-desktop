@@ -187,14 +187,14 @@ function isOurs(url) {
 
 function guardNavigation(win) {
   win.webContents.setWindowOpenHandler(({ url }) => {
-    // Auch die Systemeinstellungen (Kalenderzugriff) dürfen geöffnet werden.
-    if (/^https?:/.test(url) || url.startsWith('x-apple.systempreferences:')) shell.openExternal(url);
+    // Auch die Systemeinstellungen (Kalenderzugriff) und Mail-Links („In Mail öffnen“).
+    if (/^https?:/.test(url) || url.startsWith('x-apple.systempreferences:') || /^message:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (event, url) => {
     if (isOurs(url)) return;
     event.preventDefault();
-    if (/^https?:/.test(url)) shell.openExternal(url);
+    if (/^https?:/.test(url) || /^message:/i.test(url)) shell.openExternal(url);
   });
 }
 
@@ -515,6 +515,103 @@ function calendarCall(command, input) {
   });
 }
 
+/* ---------- E-Mails als Aufgaben (Ziehen ins Fenster) ----------
+   Die Seite liest, was beim Ablegen mitkommt (siehe web/src/components/MailDrop.tsx).
+   Apple Mail gibt nur einen Link „message:<Message-ID>“ mit; Betreff und Text
+   holt AppleScript aus Mail (beim ersten Mal fragt macOS, ob die App Mail
+   steuern darf). Für Programme, die Chromium nichts Lesbares geben (das neue
+   Outlook), schaut JXA auf die Drag-Ablage des Systems: welche Typen dort
+   liegen, Datei-Links und Text. */
+const APPLE_MAIL_SCRIPT = `on run argv
+  set wanted to item 1 of argv
+  set sep to (character id 30)
+  tell application "Mail"
+    set found to missing value
+    set picked to {}
+    try
+      set picked to (get selection)
+    end try
+    repeat with m in picked
+      try
+        if (message id of m) is wanted then
+          set found to contents of m
+          exit repeat
+        end if
+      end try
+    end repeat
+    if found is missing value then
+      try
+        set hits to (messages of inbox whose message id is wanted)
+        if (count of hits) > 0 then set found to item 1 of hits
+      end try
+    end if
+    -- Gezogen wird die ausgewählte Mail; passt die ID nicht genau, gilt die eine ausgewählte.
+    if found is missing value and (count of picked) is 1 then set found to item 1 of picked
+    if found is missing value then return ""
+    return (subject of found) & sep & (sender of found) & sep & ((date received of found) as string) & sep & (content of found)
+  end tell
+end run
+`;
+
+const DRAG_PASTEBOARD_SCRIPT = `ObjC.import('AppKit');
+function run() {
+  const name = $.NSPasteboardNameDrag || 'Apple CFPasteboard drag';
+  const pb = $.NSPasteboard.pasteboardWithName(name);
+  const out = { types: [], files: [], text: null, html: null };
+  const types = pb.types;
+  if (types && !types.isNil()) out.types = ObjC.deepUnwrap(types) || [];
+  const items = pb.pasteboardItems;
+  const count = items && !items.isNil() ? items.count : 0;
+  for (let i = 0; i < count; i += 1) {
+    const url = items.objectAtIndex(i).stringForType('public.file-url');
+    if (url && !url.isNil()) out.files.push(decodeURIComponent(url.js.replace(/^file:\\/\\//, '')));
+  }
+  const text = pb.stringForType('public.utf8-plain-text');
+  if (text && !text.isNil()) out.text = text.js.slice(0, 20000);
+  const html = pb.stringForType('public.html');
+  if (html && !html.isNil()) out.html = html.js.slice(0, 50000);
+  return JSON.stringify(out);
+}
+`;
+
+/** Ein Skript über osascript, als Datei im Datenordner (Text auf stdout). */
+function runScript(script, file, { language = [], args = [] } = {}) {
+  return new Promise((resolve) => {
+    const target = path.join(app.getPath('userData'), file);
+    try { fs.writeFileSync(target, script); } catch (error) { resolve({ ok: false, error: error.message }); return; }
+    execFile('/usr/bin/osascript', [...language, target, ...args], { timeout: 20_000, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) resolve({ ok: false, error: String(stderr || error.message).trim() });
+      else resolve({ ok: true, stdout: String(stdout) });
+    });
+  });
+}
+
+async function appleMailMessage(messageId) {
+  if (typeof messageId !== 'string' || !messageId) return { ok: false, error: 'no id' };
+  const result = await runScript(APPLE_MAIL_SCRIPT, 'apple-mail.applescript', { args: [messageId] });
+  if (!result.ok) return result;
+  const text = result.stdout.replace(/\n$/, '');
+  if (!text) return { ok: false, error: 'not found' };
+  const [subject, from, date, ...body] = text.split('\u001e');
+  return { ok: true, subject, from, date, body: body.join('\u001e') };
+}
+
+async function dragPasteboard() {
+  const result = await runScript(DRAG_PASTEBOARD_SCRIPT, 'drag-pasteboard.js', { language: ['-l', 'JavaScript'] });
+  if (!result.ok) return result;
+  try { return { ok: true, ...JSON.parse(result.stdout) }; } catch { return { ok: false, error: 'no answer' }; }
+}
+
+function readEml(file) {
+  if (typeof file !== 'string' || !/\.eml$/i.test(file)) return { ok: false, error: 'not an eml file' };
+  try {
+    if (fs.statSync(file).size > 30 * 1024 * 1024) return { ok: false, error: 'too large' };
+    return { ok: true, text: fs.readFileSync(file, 'utf8') };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
 /* ---------- Claude (über die installierte Claude-CLI) ----------
    Die Seite schickt eine Nachricht samt Kontext (Aufgaben, Termine, Regeln);
    hier läuft `claude -p` mit dem Abo der angemeldeten CLI, ohne Werkzeuge,
@@ -749,6 +846,9 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('quickadd:hide', hideQuick);
     ipcMain.on('desktop:env', (event) => { event.returnValue = desktopEnv(); });
     ipcMain.handle('calendar', (_event, command, input) => calendarCall(command, input));
+    ipcMain.handle('mail:apple', (event, messageId) => (main && event.sender === main.webContents ? appleMailMessage(messageId) : { ok: false }));
+    ipcMain.handle('mail:drag', (event) => (main && event.sender === main.webContents ? dragPasteboard() : { ok: false }));
+    ipcMain.handle('mail:read-eml', (event, file) => (main && event.sender === main.webContents ? readEml(file) : { ok: false }));
     ipcMain.handle('claude:available', () => claudeBinary() !== null);
     ipcMain.on('claude:ask', (event, request) => {
       if (main && event.sender === main.webContents && request && typeof request.requestId === 'string') claudeAsk(event.sender, request);
