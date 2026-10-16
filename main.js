@@ -503,6 +503,26 @@ function claudeBinary() {
   }) || null;
 }
 
+/* Eigene Regeln für Claude (regeln.md, frei formuliert, z. B. Planungsgewohnheiten).
+   Zuerst aus iCloud Drive, damit sie auf allen Macs gleich sind, sonst aus dem
+   Datenordner der App. Wird bei jeder Nachricht neu gelesen: Änderungen gelten sofort. */
+const CLAUDE_RULES_FILES = [
+  path.join(os.homedir(), 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'Enhanced for Todoist', 'regeln.md'),
+  path.join(app.getPath('userData'), 'claude', 'regeln.md'),
+];
+
+function claudeRules() {
+  for (const file of CLAUDE_RULES_FILES) {
+    try {
+      const text = fs.readFileSync(file, 'utf8').trim();
+      if (text) return text.slice(0, 20_000);
+    } catch {
+      // Datei fehlt oder ist (noch) nicht aus iCloud geladen: nächste versuchen.
+    }
+  }
+  return '';
+}
+
 function claudeAsk(sender, { requestId, message, system, sessionId }) {
   const send = (payload) => { if (!sender.isDestroyed()) sender.send('claude:event', { requestId, ...payload }); };
   const binary = claudeBinary();
@@ -517,7 +537,12 @@ function claudeAsk(sender, { requestId, message, system, sessionId }) {
     '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--tools', '', '--strict-mcp-config', '--setting-sources', '',
   ];
-  if (system) args.push('--append-system-prompt', String(system));
+  const rules = claudeRules();
+  const prompt = [
+    system ? String(system) : '',
+    rules ? `Rules from the user (their file regeln.md). Always follow them when planning; they take precedence over the defaults above:\n\n${rules}` : '',
+  ].filter(Boolean).join('\n\n');
+  if (prompt) args.push('--append-system-prompt', prompt);
   if (sessionId && /^[\w-]+$/.test(sessionId)) args.push('--resume', sessionId);
   const child = spawn(binary, args, { cwd, env: { ...process.env, HOME: os.homedir() }, stdio: ['ignore', 'pipe', 'pipe'] });
   claudeRuns.set(requestId, child);
