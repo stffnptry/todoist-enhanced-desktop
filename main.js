@@ -2,24 +2,98 @@ const {
   app, BrowserWindow, Menu, Notification, globalShortcut, ipcMain, shell,
 } = require('electron');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 
-/* The site is the app: nothing is bundled, so a new deploy of it is a new
-   version here the next time the window loads. Point ENHANCED_URL at
-   http://localhost:5192 to try a change from `npm run dev`. */
-const APP_URL = (process.env.ENHANCED_URL || 'https://todoistenhanced.julesbertolino.fr/').trim();
+/* Deutsche Ausgabe: Die Web-App liegt gebaut (mit deutscher Übersetzung) im
+   Ordner web/ und wird von einem kleinen Server nur auf diesem Rechner unter
+   http://localhost:5192/ ausgeliefert. Diese Adresse steht in der offiziellen
+   OAuth-Beschreibung der App, daher funktioniert "Mit Todoist verbinden".
+   ENHANCED_URL lädt stattdessen eine andere Adresse direkt. */
+const LOCAL_PORT = 5192;
+const APP_URL = (process.env.ENHANCED_URL || `http://localhost:${LOCAL_PORT}/`).trim();
 const APP_ORIGIN = new URL(APP_URL).origin;
+const WEB_ROOT = path.join(__dirname, 'web');
+const SERVE_LOCAL = !process.env.ENHANCED_URL;
 
-/* Option+Space by default. This side reads
+// Oberfläche auf Deutsch: navigator.language wird "de", die Web-App wählt
+// beim ersten Start Deutsch.
+app.commandLine.appendSwitch('lang', 'de');
+
+// Für Tests: ein eigener Datenordner, damit eine laufende App nicht stört.
+if (process.env.ENHANCED_USER_DATA) app.setPath('userData', process.env.ENHANCED_USER_DATA);
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/plain; charset=utf-8',
+};
+
+/** Beantwortet eine Anfrage mit den Dateien aus web/. */
+function serveFromBundle(req, res) {
+  let pathname;
+  try {
+    pathname = decodeURIComponent(new URL(req.url, APP_URL).pathname);
+  } catch {
+    res.writeHead(400).end();
+    return;
+  }
+  // Kein Service Worker: die Dateien liegen ohnehin lokal.
+  if (pathname === '/registerSW.js' || pathname === '/sw.js') {
+    res.writeHead(200, { 'content-type': MIME['.js'] }).end('');
+    return;
+  }
+  let file = path.normalize(path.join(WEB_ROOT, pathname));
+  if (!file.startsWith(WEB_ROOT)) {
+    res.writeHead(404).end();
+    return;
+  }
+  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    // Eine Seite der App (Ansicht, OAuth-Rückkehr): index.html beantwortet alle.
+    if (path.extname(pathname)) {
+      res.writeHead(404).end();
+      return;
+    }
+    file = path.join(WEB_ROOT, 'index.html');
+  }
+  res.writeHead(200, {
+    'content-type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+    'cache-control': 'no-cache',
+  });
+  res.end(fs.readFileSync(file));
+}
+
+/** Startet den lokalen Server; nur von diesem Rechner aus erreichbar. */
+function startLocalSite() {
+  if (!SERVE_LOCAL) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(serveFromBundle);
+    server.once('error', reject);
+    server.listen(LOCAL_PORT, '127.0.0.1', resolve);
+  });
+}
+
+/* Shift+Control+Option+Command+T (⇧⌃⌥⌘T) by default. This side reads
    `quickAddShortcut` from config.json in the app's data folder (Electron
    accelerator syntax, e.g. "Alt+Shift+Space"), or QUICKADD_SHORTCUT. */
 function readShortcut() {
   if (process.env.QUICKADD_SHORTCUT) return process.env.QUICKADD_SHORTCUT;
   try {
     const file = path.join(app.getPath('userData'), 'config.json');
-    return JSON.parse(fs.readFileSync(file, 'utf8')).quickAddShortcut || 'Alt+Space';
+    return JSON.parse(fs.readFileSync(file, 'utf8')).quickAddShortcut || 'Shift+Control+Alt+Command+T';
   } catch {
-    return 'Alt+Space';
+    return 'Shift+Control+Alt+Command+T';
   }
 }
 
@@ -102,8 +176,10 @@ function createQuick() {
       sandbox: true,
     },
   });
-  // Over other apps' full-screen windows and on whichever Space is current.
-  quick.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  /* Over other apps' full-screen windows and on whichever Space is current.
+     skipTransformProcessType: sonst macht Electron die App auf macOS zu einer
+     Hintergrund-App, und ihr Symbol verschwindet aus dem Dock. */
+  quick.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
   quick.setAlwaysOnTop(true, 'floating');
   guardNavigation(quick);
   quick.loadURL(`${APP_URL}${APP_URL.includes('?') ? '&' : '?'}quickadd`);
@@ -146,27 +222,70 @@ function registerShortcut() {
   const ok = globalShortcut.register(accelerator, toggleQuick);
   if (!ok) {
     new Notification({
-      title: 'Enhanced for Todoist',
-      body: `${accelerator} is already taken by another app. ` +
-        'Set another one in config.json: { "quickAddShortcut": "Alt+Shift+Space" }.',
+      title: app.name,
+      body: `${accelerator} wird bereits von einer anderen App verwendet. ` +
+        'Lege in config.json ein anderes Kürzel fest: { "quickAddShortcut": "Alt+Shift+Space" }.',
     }).show();
   }
 }
 
 function buildMenu() {
+  const name = app.name;
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { role: 'appMenu' },
-    { role: 'editMenu' },
     {
-      label: 'View',
+      label: name,
       submenu: [
-        { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' },
+        { role: 'about', label: `Über ${name}` },
         { type: 'separator' },
-        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
-        { type: 'separator' }, { role: 'togglefullscreen' },
+        { role: 'services', label: 'Dienste' },
+        { type: 'separator' },
+        { role: 'hide', label: `${name} ausblenden` },
+        { role: 'hideOthers', label: 'Andere ausblenden' },
+        { role: 'unhide', label: 'Alle einblenden' },
+        { type: 'separator' },
+        { role: 'quit', label: `${name} beenden` },
       ],
     },
-    { role: 'windowMenu' },
+    {
+      label: 'Bearbeiten',
+      submenu: [
+        { role: 'undo', label: 'Widerrufen' },
+        { role: 'redo', label: 'Wiederholen' },
+        { type: 'separator' },
+        { role: 'cut', label: 'Ausschneiden' },
+        { role: 'copy', label: 'Kopieren' },
+        { role: 'paste', label: 'Einsetzen' },
+        { role: 'pasteAndMatchStyle', label: 'Einsetzen und Stil anpassen' },
+        { role: 'delete', label: 'Löschen' },
+        { role: 'selectAll', label: 'Alles auswählen' },
+      ],
+    },
+    {
+      label: 'Darstellung',
+      submenu: [
+        { role: 'reload', label: 'Neu laden' },
+        { role: 'forceReload', label: 'Neu laden erzwingen' },
+        { role: 'toggleDevTools', label: 'Entwicklerwerkzeuge' },
+        { type: 'separator' },
+        { role: 'resetZoom', label: 'Originalgröße' },
+        { role: 'zoomIn', label: 'Vergrößern' },
+        { role: 'zoomOut', label: 'Verkleinern' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: 'Vollbildmodus' },
+      ],
+    },
+    {
+      label: 'Fenster',
+      role: 'windowMenu',
+      submenu: [
+        { role: 'minimize', label: 'Im Dock ablegen' },
+        { role: 'zoom', label: 'Zoomen' },
+        { type: 'separator' },
+        { role: 'front', label: 'Alle nach vorne bringen' },
+        { type: 'separator' },
+        { role: 'close', label: 'Fenster schließen' },
+      ],
+    },
   ]));
 }
 
@@ -178,7 +297,19 @@ if (!app.requestSingleInstanceLock()) {
     else { if (main.isMinimized()) main.restore(); main.focus(); }
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    try {
+      await startLocalSite();
+    } catch (error) {
+      const { dialog } = require('electron');
+      dialog.showErrorBox(
+        `${app.name} kann nicht starten`,
+        `Port ${LOCAL_PORT} auf diesem Rechner ist bereits belegt (${error.code || error.message}). ` +
+          'Beende das Programm, das ihn nutzt, und öffne die App erneut.',
+      );
+      app.quit();
+      return;
+    }
     buildMenu();
     createMain();
     createQuick();
