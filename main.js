@@ -87,16 +87,16 @@ function startLocalSite() {
   });
 }
 
-/* Shift+Control+Option+Command+T (⇧⌃⌥⌘T) by default. This side reads
+/* Shift+Control+Option+Command+E (⇧⌃⌥⌘E) by default. This side reads
    `quickAddShortcut` from config.json in the app's data folder (Electron
    accelerator syntax, e.g. "Alt+Shift+Space"), or QUICKADD_SHORTCUT. */
 function readShortcut() {
   if (process.env.QUICKADD_SHORTCUT) return process.env.QUICKADD_SHORTCUT;
   try {
     const file = path.join(app.getPath('userData'), 'config.json');
-    return JSON.parse(fs.readFileSync(file, 'utf8')).quickAddShortcut || 'Shift+Control+Alt+Command+T';
+    return JSON.parse(fs.readFileSync(file, 'utf8')).quickAddShortcut || 'Shift+Control+Alt+Command+E';
   } catch {
-    return 'Shift+Control+Alt+Command+T';
+    return 'Shift+Control+Alt+Command+E';
   }
 }
 
