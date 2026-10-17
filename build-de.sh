@@ -16,6 +16,7 @@ TMP=$(mktemp -d)
 ditto --norsrc --noextattr --noacl "dist/mac-arm64/Enhanced for Todoist DE.app" "$TMP/Enhanced for Todoist DE.app"
 codesign --force -s - "$TMP/Enhanced for Todoist DE.app/Contents/Resources/calhelper"
 codesign --force --deep -s - "$TMP/Enhanced for Todoist DE.app"
-rm -f dist/*.dmg*
+# (N): kein Fehler, wenn es noch keine .dmg gibt (frischer Clone) – zsh bricht sonst ab.
+rm -f dist/*.dmg*(N)
 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac dmg --arm64 --prepackaged "$TMP/Enhanced for Todoist DE.app"
 echo "Fertig: dist/Enhanced-for-Todoist-DE-arm64.dmg"
