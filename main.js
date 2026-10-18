@@ -1,5 +1,6 @@
 const {
-  app, BrowserWindow, Menu, Notification, globalShortcut, ipcMain, nativeTheme, shell,
+  app, BrowserWindow, Menu, Notification, globalShortcut, ipcMain, nativeTheme, screen, shell,
+  systemPreferences,
 } = require('electron');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -255,7 +256,37 @@ function createMain() {
     event.preventDefault();
     main.hide();
   });
-  main.on('closed', () => { main = null; });
+  main.on('blur', stopWindowDrag);
+  main.on('closed', () => { stopWindowDrag(); main = null; });
+}
+
+/* Fenster verschieben: Die Seite meldet Maus gedrückt/losgelassen im Kopf
+   (preload.js), hier folgt das Fenster dem Mauszeiger. Ersetzt die
+   CSS-Zieh-Flächen (-webkit-app-region), die am Mac nur unzuverlässig griffen. */
+let windowDrag = null;
+function startWindowDrag(win) {
+  stopWindowDrag();
+  if (!win || win.isDestroyed() || win.isFullScreen()) return;
+  const start = screen.getCursorScreenPoint();
+  const [x, y] = win.getPosition();
+  windowDrag = setInterval(() => {
+    if (win.isDestroyed()) { stopWindowDrag(); return; }
+    const now = screen.getCursorScreenPoint();
+    win.setPosition(x + now.x - start.x, y + now.y - start.y);
+  }, 8);
+}
+function stopWindowDrag() {
+  if (windowDrag) clearInterval(windowDrag);
+  windowDrag = null;
+}
+// Doppelklick auf den Kopf wie bei jedem Mac-Fenster (Systemeinstellung „Doppelklick auf Titelleiste“).
+function titleBarDoubleClick(win) {
+  if (!win || win.isDestroyed()) return;
+  const action = process.platform === 'darwin'
+    ? systemPreferences.getUserDefault('AppleActionOnDoubleClick', 'string') : 'Maximize';
+  if (action === 'None') return;
+  if (action === 'Minimize') { win.minimize(); return; }
+  if (win.isMaximized()) win.unmaximize(); else win.maximize();
 }
 
 function createQuick() {
@@ -928,6 +959,9 @@ if (!app.requestSingleInstanceLock()) {
     createQuick();
     registerShortcut();
     ipcMain.on('quickadd:hide', hideQuick);
+    ipcMain.on('window:drag-start', (event) => { if (main && event.sender === main.webContents) startWindowDrag(main); });
+    ipcMain.on('window:drag-end', stopWindowDrag);
+    ipcMain.on('window:double-click', (event) => { if (main && event.sender === main.webContents) titleBarDoubleClick(main); });
     ipcMain.on('desktop:env', (event) => { event.returnValue = desktopEnv(); });
     ipcMain.handle('calendar', (_event, command, input) => calendarCall(command, input));
     ipcMain.handle('mail:apple', (event, messageId) => (main && event.sender === main.webContents ? appleMailMessage(messageId) : { ok: false }));

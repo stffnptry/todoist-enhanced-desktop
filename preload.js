@@ -69,12 +69,51 @@ function reportScheme() {
   if (scheme) ipcRenderer.send('desktop:scheme', scheme);
 }
 
+/* Fenster verschieben: Maus gedrückt im Kopf → main.js bewegt das Fenster mit,
+   bis die Maus losgelassen wird. Kopf = leerer Hintergrund in den obersten
+   44 px, die Profilzeile der Seitenleiste und die Titelzeile der Seite;
+   Bedienelemente darin bleiben normal klickbar. */
+const DRAG_BAND = 44;
+const DRAG_ZONES = '.sidebar .side-top, .page .phead';
+const BACKGROUND = 'html, body, .app, .workspace, .sidebar, .screen, .page';
+const NOT_DRAG = [
+  '.menu', '[role=menu]', '[role=dialog]', '[role=listbox]',
+  'button', 'a[href]', 'input', 'textarea', 'select', 'label', 'summary',
+  '[role=button]', '[role=tab]', '[role=menuitem]', '[role=checkbox]', '[role=switch]',
+  '[role=option]', '[role=link]', '[contenteditable]:not([contenteditable=false])',
+  '[draggable=true]',
+].join(', ');
+let draggingWindow = false;
+function inDragArea(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target || event.button !== 0 || target.closest(NOT_DRAG)) return false;
+  if (target.closest(DRAG_ZONES)) return true;
+  return event.clientY < DRAG_BAND && target.matches(BACKGROUND);
+}
+function endWindowDrag() {
+  if (!draggingWindow) return;
+  draggingWindow = false;
+  ipcRenderer.send('window:drag-end');
+}
+function watchWindowDrag() {
+  window.addEventListener('mousedown', (event) => {
+    if (!inDragArea(event)) return;
+    event.preventDefault(); // keine Textauswahl beim Ziehen
+    if (event.detail === 2) { ipcRenderer.send('window:double-click'); return; }
+    draggingWindow = true;
+    ipcRenderer.send('window:drag-start');
+  }, true);
+  window.addEventListener('mouseup', endWindowDrag, true);
+  window.addEventListener('blur', endWindowDrag);
+}
+
 // Lets the site's stylesheet make room for the window buttons.
 window.addEventListener('DOMContentLoaded', () => {
   const root = document.documentElement;
   root.classList.add('desktop-app');
   applyEnv(ipcRenderer.sendSync('desktop:env'));
   if (new URLSearchParams(location.search).has('quickadd')) return;
+  watchWindowDrag();
   reportScheme();
   new MutationObserver(reportScheme).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
 });
