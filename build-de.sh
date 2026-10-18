@@ -4,6 +4,15 @@
 set -e
 cd "${0:A:h}"
 WEB=../web
+# Abhängigkeiten der Hülle passend zur package-lock.json, z. B. nach einem
+# Electron-Update. Ohne Installationsskripte (die sind am Mac blockiert; ab
+# Electron 42 braucht es keine mehr, electron-builder lädt Electron selbst).
+want=$(node -p "require('./package-lock.json').packages['node_modules/electron'].version")
+have=$(node -p "try { require('./node_modules/electron/package.json').version } catch { '' }")
+if [[ "$want" != "$have" ]]; then
+  echo "→ Electron $have → $want: installiere Abhängigkeiten …"
+  npm ci --ignore-scripts --no-audit --no-fund
+fi
 (cd $WEB && npm run build)
 rm -rf web && cp -R $WEB/dist web && rm -f web/og-image.png
 # Kalender-Hilfsprogramm (EventKit)

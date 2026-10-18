@@ -449,13 +449,14 @@ function openTaskInMain(itemId) {
 const REMINDER_ACTIONS = ['done', 'snooze15', 'snooze60'];
 const DEFAULT_ACTION_LABELS = ['Erledigt', '+15 Min.', '+1 Std.'];
 
-/* macOS holt die App nach vorn, sobald ein Knopf der Mitteilung gedrückt
-   wird (meldet „activate“ und „did-become-active“) – auch wenn das Fenster
-   offen, aber hinter anderen Programmen lag. Deshalb: War die App beim Knopf
-   nicht schon vorher vorn, geht sie danach sofort wieder nach hinten
-   (app.hide(), wie ⌘H) und der Fokus zurück ans vorige Programm. War sie
-   vorn, bleibt alles, wie es war. Die Reihenfolge der Ereignisse ist nicht
-   fest, daher in beide Richtungen abgesichert und kurz verzögert. */
+/* Knöpfe an der Mitteilung sollen die App nicht nach vorn holen. Seit
+   Electron 42 laufen Mitteilungen über UNUserNotificationCenter; dessen Knöpfe
+   (ohne „Foreground“-Option) lassen die App im Hintergrund. Die frühere API
+   (NSUserNotification) holte sie bei jedem Knopf nach vorn, das Fenster
+   blitzte auf. Als Netz bleibt: Wird die App trotzdem direkt um den Knopf
+   herum aktiv, ohne vorher vorn gewesen zu sein, geht sie wieder nach hinten
+   (app.hide(), wie ⌘H) und der Fokus zurück ans vorige Programm. Die
+   Reihenfolge der Ereignisse ist nicht fest, daher in beide Richtungen. */
 const REMINDER_ACTION_QUIET_MS = 2000;
 let reminderActionAt = 0;
 let activateShownAt = 0;
@@ -473,17 +474,19 @@ function sendAppBack() {
 
 function quietAfterReminderAction() {
   const now = Date.now();
-  // Erst seit eben vorn: Das war macOS wegen des Knopfs, nicht der Nutzer.
-  const wasInFront = appActive && now - appActiveSince > 1500;
   reminderActionAt = now;
-  backAfterAction = !wasInFront;
-  if (backAfterAction) for (const ms of [100, 400]) setTimeout(sendAppBack, ms);
+  backAfterAction = false;
+  if (!appActive) backAfterAction = true; // kommt die Aktivierung noch, geht's zurück
+  else if (now - appActiveSince < 1500) setTimeout(sendAppBack, 0); // eben erst vorn: das war der Knopf
 }
 
 app.on('did-become-active', () => {
   appActive = true;
   appActiveSince = Date.now();
-  if (backAfterAction && Date.now() - reminderActionAt < REMINDER_ACTION_QUIET_MS) setTimeout(sendAppBack, 50);
+  if (backAfterAction && Date.now() - reminderActionAt < REMINDER_ACTION_QUIET_MS) {
+    backAfterAction = false;
+    setTimeout(sendAppBack, 0);
+  }
 });
 app.on('did-resign-active', () => { appActive = false; });
 
@@ -517,6 +520,8 @@ function showReminder(reminder) {
     sendTaskAction(reminder.itemId, action);
   });
   notification.on('close', forget);
+  // UNUserNotificationCenter verweigert Mitteilungen unsignierter Apps (ad-hoc reicht).
+  notification.on('failed', (_event, error) => { forget(); console.error('Mitteilung fehlgeschlagen:', error); });
   notification.show();
 }
 
