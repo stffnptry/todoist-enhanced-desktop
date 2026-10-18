@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld('enhancedDesktop', {
     dragPasteboard: () => ipcRenderer.invoke('mail:drag'),
     readEml: (file) => ipcRenderer.invoke('mail:read-eml', file),
   },
+  // Report exportieren (siehe main.js): Sichern-Dialog, dann Datei schreiben.
+  report: {
+    saveMarkdown: (name, content) => ipcRenderer.invoke('report:save-md', name, content),
+    savePdf: (name, html) => ipcRenderer.invoke('report:save-pdf', name, html),
+    reveal: (file) => ipcRenderer.invoke('report:reveal', file),
+  },
   // Claude über die installierte CLI (siehe main.js). Ereignisse: delta, done, error, cancelled.
   claude: {
     available: () => ipcRenderer.invoke('claude:available'),

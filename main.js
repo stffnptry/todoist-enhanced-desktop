@@ -852,6 +852,57 @@ function buildMenu() {
   ]));
 }
 
+/* Report-Export (Ansicht „Report“): Die Seite liefert fertigen Inhalt, die
+   Hülle fragt per Sichern-Dialog nach dem Ort und schreibt die Datei. Für das
+   PDF lädt ein unsichtbares Fenster das übergebene HTML (ohne Skripte, ohne
+   Netz) und druckt es mit printToPDF. */
+function safeFileName(name, ext) {
+  const base = String(name || 'Report').replace(/[\\/:*?"<>|]+/g, '-').trim().slice(0, 120) || 'Report';
+  return base.endsWith(ext) ? base : `${base}${ext}`;
+}
+
+async function askSavePath(name, ext, label) {
+  const { dialog } = require('electron');
+  const result = await dialog.showSaveDialog(main, {
+    defaultPath: path.join(app.getPath('downloads'), safeFileName(name, ext)),
+    filters: [{ name: label, extensions: [ext.slice(1)] }],
+  });
+  return result.canceled || !result.filePath ? null : result.filePath;
+}
+
+async function saveReportMarkdown(name, content) {
+  if (typeof content !== 'string') return { ok: false };
+  const file = await askSavePath(name, '.md', 'Markdown');
+  if (!file) return { ok: false, cancelled: true };
+  fs.writeFileSync(file, content, 'utf8');
+  return { ok: true, path: file };
+}
+
+async function saveReportPdf(name, html) {
+  if (typeof html !== 'string') return { ok: false };
+  const file = await askSavePath(name, '.pdf', 'PDF');
+  if (!file) return { ok: false, cancelled: true };
+  const printer = new BrowserWindow({
+    show: false,
+    webPreferences: { javascript: false, sandbox: true, contextIsolation: true, partition: 'report-print' },
+  });
+  // Nichts nachladen: der Report bringt alles inline mit. Eigene Sitzung
+  // (partition), damit die Sperre das Hauptfenster nicht trifft.
+  printer.webContents.session.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_d, done) => done({ cancel: true }));
+  try {
+    await printer.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    const pdf = await printer.webContents.printToPDF({
+      pageSize: 'A4',
+      printBackground: true,
+      margins: { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 },
+    });
+    fs.writeFileSync(file, pdf);
+    return { ok: true, path: file };
+  } finally {
+    printer.destroy();
+  }
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -883,6 +934,11 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('mail:drag', (event) => (main && event.sender === main.webContents ? dragPasteboard() : { ok: false }));
     ipcMain.handle('mail:read-eml', (event, file) => (main && event.sender === main.webContents ? readEml(file) : { ok: false }));
     ipcMain.handle('claude:available', () => claudeBinary() !== null);
+    ipcMain.handle('report:save-md', (event, name, content) => (main && event.sender === main.webContents ? saveReportMarkdown(name, content) : { ok: false }));
+    ipcMain.handle('report:save-pdf', (event, name, html) => (main && event.sender === main.webContents ? saveReportPdf(name, html) : { ok: false }));
+    ipcMain.handle('report:reveal', (event, file) => {
+      if (main && event.sender === main.webContents && typeof file === 'string') shell.showItemInFolder(file);
+    });
     ipcMain.on('claude:ask', (event, request) => {
       if (main && event.sender === main.webContents && request && typeof request.requestId === 'string') claudeAsk(event.sender, request);
     });
