@@ -409,15 +409,40 @@ function openTaskInMain(itemId) {
   else send();
 }
 
+/* Knöpfe an der Mitteilung: Erledigt, +15 Min., +1 Std. Die Beschriftung
+   schickt die Seite in ihrer Sprache mit; die Reihenfolge steht hier fest.
+   macOS zeigt Knöpfe nur bei signierten Apps; den ersten als Knopf, die
+   übrigen im Ausklappmenü daneben. Die Seite erledigt bzw. verschiebt die
+   Aufgabe, ohne dass sich das Fenster öffnet. */
+const REMINDER_ACTIONS = ['done', 'snooze15', 'snooze60'];
+const DEFAULT_ACTION_LABELS = ['Erledigt', '+15 Min.', '+1 Std.'];
+
+function sendTaskAction(itemId, action) {
+  if (!main) createMain();
+  const send = () => main && main.webContents.send('desktop:task-action', { itemId, action });
+  if (main.webContents.isLoading()) main.webContents.once('did-finish-load', send);
+  else send();
+}
+
 function showReminder(reminder) {
   if (shownReminders.has(reminder.key) || !Notification.isSupported()) return;
   shownReminders.add(reminder.key);
-  const notification = new Notification({ title: reminder.title, body: reminder.body });
+  const notification = new Notification({
+    title: reminder.title,
+    body: reminder.body,
+    actions: reminder.actions.map((text) => ({ type: 'button', text })),
+    closeButtonText: reminder.closeText,
+  });
   liveNotifications.add(notification);
   const forget = () => liveNotifications.delete(notification);
   notification.on('click', () => {
     forget();
     openTaskInMain(reminder.itemId);
+  });
+  notification.on('action', (_event, index) => {
+    forget();
+    const action = REMINDER_ACTIONS[index];
+    if (action) sendTaskAction(reminder.itemId, action);
   });
   notification.on('close', forget);
   notification.show();
@@ -431,7 +456,15 @@ function scheduleReminders(list) {
   for (const r of list) {
     if (!r || typeof r.key !== 'string' || typeof r.itemId !== 'string' || typeof r.at !== 'number') continue;
     if (shownReminders.has(r.key) || r.at > now + REMINDER_HORIZON_MS) continue;
-    const reminder = { key: r.key, itemId: r.itemId, title: String(r.title || app.name), body: String(r.body || '') };
+    const labels = Array.isArray(r.actions) ? r.actions : [];
+    const reminder = {
+      key: r.key,
+      itemId: r.itemId,
+      title: String(r.title || app.name),
+      body: String(r.body || ''),
+      actions: DEFAULT_ACTION_LABELS.map((fallback, i) => String(labels[i] || fallback)),
+      closeText: String(r.closeText || 'Schließen'),
+    };
     reminderTimers.set(r.key, setTimeout(() => {
       reminderTimers.delete(r.key);
       showReminder(reminder);

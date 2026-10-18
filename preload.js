@@ -35,6 +35,11 @@ ipcRenderer.on('desktop:open-task', (_event, itemId) => {
   window.dispatchEvent(new CustomEvent('enhanced:open-task', { detail: itemId }));
 });
 
+// Ein Knopf an einer Mitteilung (Erledigt, +15 Min., +1 Std.): die Seite führt ihn aus.
+ipcRenderer.on('desktop:task-action', (_event, detail) => {
+  window.dispatchEvent(new CustomEvent('enhanced:task-action', { detail }));
+});
+
 // The quick-add window is kept alive and shown again on each shortcut press.
 ipcRenderer.on('quickadd:show', () => {
   window.dispatchEvent(new CustomEvent('enhanced:quickadd'));
