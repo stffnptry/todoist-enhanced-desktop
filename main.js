@@ -228,8 +228,9 @@ function textContextMenu(win) {
   });
 }
 
-function createMain() {
+function createMain({ show = true } = {}) {
   main = new BrowserWindow({
+    show,
     width: 1240,
     height: 820,
     minWidth: 720,
@@ -448,8 +449,25 @@ function openTaskInMain(itemId) {
 const REMINDER_ACTIONS = ['done', 'snooze15', 'snooze60'];
 const DEFAULT_ACTION_LABELS = ['Erledigt', '+15 Min.', '+1 Std.'];
 
+/* macOS holt die App nach vorn, sobald ein Knopf der Mitteilung gedrückt
+   wird, und meldet das als „activate“ – das würde das Hauptfenster zeigen.
+   Deshalb merken: Kurz nach einem Knopf bleibt das Fenster, wie es war, und
+   die App gibt den Fokus an das vorige Programm zurück. Die Reihenfolge der
+   beiden Ereignisse ist nicht fest, daher in beide Richtungen abgesichert. */
+const REMINDER_ACTION_QUIET_MS = 2000;
+let reminderActionAt = 0;
+let activateShownAt = 0;
+
+function quietAfterReminderAction() {
+  reminderActionAt = Date.now();
+  // „activate“ kam zuerst und hat ein verstecktes Fenster gezeigt: wieder weg.
+  if (main && !main.isDestroyed() && Date.now() - activateShownAt < REMINDER_ACTION_QUIET_MS) main.hide();
+  const anyVisible = BrowserWindow.getAllWindows().some((w) => w.isVisible());
+  if (process.platform === 'darwin' && !anyVisible) app.hide();
+}
+
 function sendTaskAction(itemId, action) {
-  if (!main) createMain();
+  if (!main) createMain({ show: false });
   const send = () => main && main.webContents.send('desktop:task-action', { itemId, action });
   if (main.webContents.isLoading()) main.webContents.once('did-finish-load', send);
   else send();
@@ -473,7 +491,9 @@ function showReminder(reminder) {
   notification.on('action', (_event, index) => {
     forget();
     const action = REMINDER_ACTIONS[index];
-    if (action) sendTaskAction(reminder.itemId, action);
+    if (!action) return;
+    quietAfterReminderAction();
+    sendTaskAction(reminder.itemId, action);
   });
   notification.on('close', forget);
   notification.show();
@@ -1004,7 +1024,9 @@ if (!app.requestSingleInstanceLock()) {
        opened again, if it was closed) behind every shortcut press. */
     app.on('activate', () => {
       if (quick && (quick.isVisible() || Date.now() - quickShownAt < 1000)) return;
-      if (!main) createMain(); else main.show();
+      if (Date.now() - reminderActionAt < REMINDER_ACTION_QUIET_MS) return;
+      if (!main) createMain();
+      else if (!main.isVisible()) { main.show(); activateShownAt = Date.now(); }
     });
   });
 
