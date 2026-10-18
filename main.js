@@ -450,21 +450,42 @@ const REMINDER_ACTIONS = ['done', 'snooze15', 'snooze60'];
 const DEFAULT_ACTION_LABELS = ['Erledigt', '+15 Min.', '+1 Std.'];
 
 /* macOS holt die App nach vorn, sobald ein Knopf der Mitteilung gedrückt
-   wird, und meldet das als „activate“ – das würde das Hauptfenster zeigen.
-   Deshalb merken: Kurz nach einem Knopf bleibt das Fenster, wie es war, und
-   die App gibt den Fokus an das vorige Programm zurück. Die Reihenfolge der
-   beiden Ereignisse ist nicht fest, daher in beide Richtungen abgesichert. */
+   wird (meldet „activate“ und „did-become-active“) – auch wenn das Fenster
+   offen, aber hinter anderen Programmen lag. Deshalb: War die App beim Knopf
+   nicht schon vorher vorn, geht sie danach sofort wieder nach hinten
+   (app.hide(), wie ⌘H) und der Fokus zurück ans vorige Programm. War sie
+   vorn, bleibt alles, wie es war. Die Reihenfolge der Ereignisse ist nicht
+   fest, daher in beide Richtungen abgesichert und kurz verzögert. */
 const REMINDER_ACTION_QUIET_MS = 2000;
 let reminderActionAt = 0;
 let activateShownAt = 0;
+let appActive = false;
+let appActiveSince = 0;
+let backAfterAction = false;
+
+function sendAppBack() {
+  if (process.platform !== 'darwin') return;
+  // „activate“ hat ein verstecktes Fenster gezeigt: wieder verstecken.
+  if (main && !main.isDestroyed() && Date.now() - activateShownAt < REMINDER_ACTION_QUIET_MS) main.hide();
+  if (quick && !quick.isDestroyed() && quick.isVisible()) return;
+  app.hide();
+}
 
 function quietAfterReminderAction() {
-  reminderActionAt = Date.now();
-  // „activate“ kam zuerst und hat ein verstecktes Fenster gezeigt: wieder weg.
-  if (main && !main.isDestroyed() && Date.now() - activateShownAt < REMINDER_ACTION_QUIET_MS) main.hide();
-  const anyVisible = BrowserWindow.getAllWindows().some((w) => w.isVisible());
-  if (process.platform === 'darwin' && !anyVisible) app.hide();
+  const now = Date.now();
+  // Erst seit eben vorn: Das war macOS wegen des Knopfs, nicht der Nutzer.
+  const wasInFront = appActive && now - appActiveSince > 1500;
+  reminderActionAt = now;
+  backAfterAction = !wasInFront;
+  if (backAfterAction) for (const ms of [100, 400]) setTimeout(sendAppBack, ms);
 }
+
+app.on('did-become-active', () => {
+  appActive = true;
+  appActiveSince = Date.now();
+  if (backAfterAction && Date.now() - reminderActionAt < REMINDER_ACTION_QUIET_MS) setTimeout(sendAppBack, 50);
+});
+app.on('did-resign-active', () => { appActive = false; });
 
 function sendTaskAction(itemId, action) {
   if (!main) createMain({ show: false });
