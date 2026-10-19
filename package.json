@@ -14,7 +14,8 @@
   },
   "devDependencies": {
     "electron": "44.5.1",
-    "electron-builder": "^26.0.0"
+    "electron-builder": "^26.0.0",
+    "node-api-headers": "1.9.0"
   },
   "build": {
     "appId": "fr.julesbertolino.todoistenhanced.desktop.de",
@@ -61,6 +62,10 @@
       {
         "from": "build/native/calhelper",
         "to": "calhelper"
+      },
+      {
+        "from": "build/native/dragpromise.node",
+        "to": "dragpromise.node"
       }
     ]
   },

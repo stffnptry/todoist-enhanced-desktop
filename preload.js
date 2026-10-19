@@ -8,10 +8,11 @@ contextBridge.exposeInMainWorld('enhancedDesktop', {
   setReminders: (list) => ipcRenderer.send('desktop:reminders', list),
   // Der macOS-Kalender (siehe main.js): access, calendars, events, create, update, delete, create-calendar.
   calendar: (command, input) => ipcRenderer.invoke('calendar', command, input),
-  // E-Mails als Aufgaben (siehe main.js): Apple Mail per AppleScript, die Drag-Ablage, .eml-Dateien.
+  // E-Mails als Aufgaben (siehe main.js): Apple Mail per AppleScript, Outlooks Datei-Versprechen, die Drag-Ablage, .eml-Dateien.
   mail: {
     fromAppleMail: (messageId) => ipcRenderer.invoke('mail:apple', messageId),
     dragPasteboard: () => ipcRenderer.invoke('mail:drag'),
+    promised: () => ipcRenderer.invoke('mail:promised'),
     readEml: (file) => ipcRenderer.invoke('mail:read-eml', file),
   },
   // Report exportieren (siehe main.js): Sichern-Dialog, dann Datei schreiben.

@@ -249,6 +249,8 @@ function createMain({ show = true } = {}) {
   guardNavigation(main);
   textContextMenu(main);
   main.loadURL(APP_URL);
+  // Outlook-Mails: das Fenster auch für Datei-Versprechen anmelden (siehe installDragPromises).
+  main.webContents.on('did-finish-load', () => installDragPromises(main));
   /* Schließen blendet das Fenster nur aus: Die Seite liest weiter von Todoist,
      damit die Mitteilungen zu fälligen Aufgaben aktuell bleiben. Beenden
      (⌘Q) schließt es wirklich. */
@@ -712,8 +714,84 @@ async function dragPasteboard() {
   try { return { ok: true, ...JSON.parse(result.stdout) }; } catch { return { ok: false, error: 'no answer' }; }
 }
 
+/* Outlook (auch das neue) gibt beim Ziehen nur ein Datei-Versprechen mit:
+   Die .eml entsteht erst, wenn das Ziel einen Ordner nennt. Chromium kennt das
+   nicht, die Seite bekäme vom Ziehen nichts mit. native/dragpromise.mm meldet
+   die Seite dafür an, löst beim Ablegen die Versprechen in mailDrops() ein und
+   meldet jede fertige Datei hierher; die Seite fragt danach (mail:promised). */
+const DRAGPROMISE = app.isPackaged
+  ? path.join(process.resourcesPath, 'dragpromise.node')
+  : path.join(__dirname, 'build', 'native', 'dragpromise.node');
+const mailDrops = () => path.join(app.getPath('temp'), 'enhanced-for-todoist-de-mails');
+let dragPromiseAddon;
+let promiseDrop = null;
+const promiseDropWaiters = new Set();
+
+function installDragPromises(win) {
+  if (process.platform !== 'darwin' || !win || win.isDestroyed()) return;
+  if (dragPromiseAddon === undefined) {
+    try {
+      dragPromiseAddon = require(DRAGPROMISE);
+      // Mails vom letzten Mal wegräumen.
+      fs.rmSync(mailDrops(), { recursive: true, force: true });
+    } catch (error) {
+      dragPromiseAddon = null;
+      console.warn('dragpromise:', error.message);
+    }
+  }
+  if (!dragPromiseAddon) return;
+  try {
+    fs.mkdirSync(mailDrops(), { recursive: true });
+    const views = dragPromiseAddon.install(win.getNativeWindowHandle(), mailDrops(), onDragPromise);
+    if (!views) console.warn('dragpromise: keine Ablage-Ansicht gefunden');
+  } catch (error) {
+    console.warn('dragpromise:', error.message);
+  }
+}
+
+function onDragPromise({ kind, value }) {
+  if (kind === 'start') {
+    let finish;
+    const done = new Promise((resolve) => { finish = resolve; });
+    const drop = { at: Date.now(), expected: Number(value) || 1, files: [], errors: [], done, finish };
+    // Schreibt das Mailprogramm nicht (rechtzeitig), gilt, was bis dahin da ist.
+    drop.timer = setTimeout(finish, 10_000);
+    promiseDrop = drop;
+    for (const wake of promiseDropWaiters) wake();
+    return;
+  }
+  const drop = promiseDrop;
+  if (!drop) return;
+  if (kind === 'file') drop.files.push(value);
+  else drop.errors.push(value);
+  if (drop.files.length + drop.errors.length >= drop.expected) {
+    clearTimeout(drop.timer);
+    drop.finish();
+  }
+}
+
+/** Die Dateien zum letzten Ablegen mit Datei-Versprechen (leer, wenn es keins gab). */
+async function promisedMails() {
+  const fresh = () => promiseDrop && Date.now() - promiseDrop.at < 15_000;
+  if (!fresh()) {
+    // Die Meldung vom Ablegen und die Frage der Seite kommen fast gleichzeitig an.
+    await new Promise((resolve) => {
+      const wake = () => { promiseDropWaiters.delete(wake); clearTimeout(timer); resolve(); };
+      const timer = setTimeout(wake, 500);
+      promiseDropWaiters.add(wake);
+    });
+  }
+  if (!fresh()) return { ok: true, files: [] };
+  const drop = promiseDrop;
+  promiseDrop = null;
+  await drop.done;
+  return { ok: true, files: drop.files, errors: drop.errors };
+}
+
 function readEml(file) {
-  if (typeof file !== 'string' || !/\.eml$/i.test(file)) return { ok: false, error: 'not an eml file' };
+  // Eingelöste Versprechen dürfen jeden Namen haben, sonst nur .eml.
+  const promised = typeof file === 'string' && path.resolve(file).startsWith(mailDrops() + path.sep);
+  if (typeof file !== 'string' || !(promised || /\.eml$/i.test(file))) return { ok: false, error: 'not an eml file' };
   try {
     if (fs.statSync(file).size > 30 * 1024 * 1024) return { ok: false, error: 'too large' };
     return { ok: true, text: fs.readFileSync(file, 'utf8') };
@@ -1012,6 +1090,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('calendar', (_event, command, input) => calendarCall(command, input));
     ipcMain.handle('mail:apple', (event, messageId) => (main && event.sender === main.webContents ? appleMailMessage(messageId) : { ok: false }));
     ipcMain.handle('mail:drag', (event) => (main && event.sender === main.webContents ? dragPasteboard() : { ok: false }));
+    ipcMain.handle('mail:promised', (event) => (main && event.sender === main.webContents ? promisedMails() : { ok: false }));
     ipcMain.handle('mail:read-eml', (event, file) => (main && event.sender === main.webContents ? readEml(file) : { ok: false }));
     ipcMain.handle('claude:available', () => claudeBinary() !== null);
     ipcMain.handle('report:save-md', (event, name, content) => (main && event.sender === main.webContents ? saveReportMarkdown(name, content) : { ok: false }));
