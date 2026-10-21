@@ -48,7 +48,7 @@
         "CFBundleLocalizations": [
           "de"
         ],
-        "NSAppleEventsUsageDescription": "Enhanced for Todoist DE liest Betreff und Text einer Mail, die du aus Apple Mail ins Fenster ziehst, um daraus eine Aufgabe zu machen.",
+        "NSAppleEventsUsageDescription": "Enhanced for Todoist DE liest Betreff und Text einer Mail, die du aus Apple Mail oder Outlook ins Fenster ziehst, um daraus eine Aufgabe zu machen.",
         "NSCalendarsFullAccessUsageDescription": "Enhanced for Todoist DE zeigt deine Termine neben deinen Aufgaben und trägt eingeplante Aufgaben in einen Kalender deiner Wahl ein.",
         "NSCalendarsUsageDescription": "Enhanced for Todoist DE zeigt deine Termine neben deinen Aufgaben und trägt eingeplante Aufgaben in einen Kalender deiner Wahl ein.",
         "NSUserNotificationAlertStyle": "alert"

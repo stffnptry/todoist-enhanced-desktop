@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('enhancedDesktop', {
     fromAppleMail: (messageId) => ipcRenderer.invoke('mail:apple', messageId),
     dragPasteboard: () => ipcRenderer.invoke('mail:drag'),
     promised: () => ipcRenderer.invoke('mail:promised'),
+    fromOutlook: () => ipcRenderer.invoke('mail:outlook'),
     readEml: (file) => ipcRenderer.invoke('mail:read-eml', file),
   },
   // Report exportieren (siehe main.js): Sichern-Dialog, dann Datei schreiben.

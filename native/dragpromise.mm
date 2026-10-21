@@ -82,7 +82,8 @@ void ReceivePromises(id<NSDraggingInfo> info) {
   }
   NSUInteger expected = 0;
   for (NSFilePromiseReceiver* receiver in receivers) expected += MAX((NSUInteger)1, receiver.fileNames.count);
-  Notify(@"start", [NSString stringWithFormat:@"%lu", (unsigned long)expected]);
+  // Anzahl und Ordner: main.js schaut dort auch selbst nach (siehe promisedMails()).
+  Notify(@"start", [NSString stringWithFormat:@"%lu\t%@", (unsigned long)expected, folder]);
 
   NSURL* destination = [NSURL fileURLWithPath:folder isDirectory:YES];
   for (NSFilePromiseReceiver* receiver in receivers) {

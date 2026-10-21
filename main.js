@@ -724,7 +724,7 @@ const DRAGPROMISE = app.isPackaged
   : path.join(__dirname, 'build', 'native', 'dragpromise.node');
 const mailDrops = () => path.join(app.getPath('temp'), 'enhanced-for-todoist-de-mails');
 let dragPromiseAddon;
-let promiseDrop = null;
+let promiseDrop = null; // { at, expected, folder, files, errors }
 const promiseDropWaiters = new Set();
 
 function installDragPromises(win) {
@@ -751,26 +751,33 @@ function installDragPromises(win) {
 
 function onDragPromise({ kind, value }) {
   if (kind === 'start') {
-    let finish;
-    const done = new Promise((resolve) => { finish = resolve; });
-    const drop = { at: Date.now(), expected: Number(value) || 1, files: [], errors: [], done, finish };
-    // Schreibt das Mailprogramm nicht (rechtzeitig), gilt, was bis dahin da ist.
-    drop.timer = setTimeout(finish, 10_000);
-    promiseDrop = drop;
+    const [expected, folder] = String(value).split('\t');
+    promiseDrop = { at: Date.now(), expected: Number(expected) || 1, folder, files: new Set(), errors: [] };
     for (const wake of promiseDropWaiters) wake();
     return;
   }
   const drop = promiseDrop;
   if (!drop) return;
-  if (kind === 'file') drop.files.push(value);
+  if (kind === 'file') drop.files.add(value);
   else drop.errors.push(value);
-  if (drop.files.length + drop.errors.length >= drop.expected) {
-    clearTimeout(drop.timer);
-    drop.finish();
+}
+
+/** Fertige Dateien im Ordner eines Ablegens (versteckte und leere zählen nicht). */
+function dropFolderFiles(folder) {
+  try {
+    return fs.readdirSync(folder)
+      .filter((name) => !name.startsWith('.'))
+      .map((name) => path.join(folder, name))
+      .filter((file) => { try { const stat = fs.statSync(file); return stat.isFile() && stat.size > 0; } catch { return false; } });
+  } catch {
+    return [];
   }
 }
 
-/** Die Dateien zum letzten Ablegen mit Datei-Versprechen (leer, wenn es keins gab). */
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+/** Die Dateien zum letzten Ablegen mit Datei-Versprechen (leer, wenn es keins gab).
+    `note` sagt bei leerem Ergebnis, woran es lag – für die Meldung in der Seite. */
 async function promisedMails() {
   const fresh = () => promiseDrop && Date.now() - promiseDrop.at < 15_000;
   if (!fresh()) {
@@ -781,16 +788,80 @@ async function promisedMails() {
       promiseDropWaiters.add(wake);
     });
   }
-  if (!fresh()) return { ok: true, files: [] };
+  if (!fresh()) {
+    const note = dragPromiseAddon ? 'Versprechen: nicht abgefangen' : `Versprechen: Modul ${dragPromiseAddon === null ? 'nicht geladen' : 'nicht bereit'}`;
+    return { ok: true, files: [], note };
+  }
   const drop = promiseDrop;
   promiseDrop = null;
-  await drop.done;
-  return { ok: true, files: drop.files, errors: drop.errors };
+  /* Neben der Rückmeldung von macOS auch selbst in den Ordner schauen: Manche
+     Programme schreiben ihre Datei, ohne dass die Rückmeldung je kommt. Fertig
+     ist, wenn genug Dateien da sind und ihre Größe sich nicht mehr ändert. */
+  let last = '';
+  for (let waited = 0; waited < 12_000; waited += 250) {
+    const files = [...new Set([...drop.files, ...dropFolderFiles(drop.folder)])];
+    const sizes = files.map((file) => { try { return fs.statSync(file).size; } catch { return -1; } }).join(',');
+    if (files.length > 0 && files.length + drop.errors.length >= drop.expected && sizes === last) {
+      return { ok: true, files, errors: drop.errors };
+    }
+    if (files.length === 0 && drop.errors.length >= drop.expected) break;
+    last = files.length > 0 ? sizes : '';
+    await sleep(250);
+  }
+  const files = [...new Set([...drop.files, ...dropFolderFiles(drop.folder)])];
+  return { ok: true, files, errors: drop.errors, note: files.length ? undefined : 'Versprechen: keine Datei erhalten' };
+}
+
+/* Notlösung für Outlook, falls keine Datei kommt: die ausgewählten Mails per
+   AppleScript (wie bei Apple Mail; das klassische Outlook kann das, das neue
+   nur zum Teil). Gezogen wird immer die Auswahl. */
+const OUTLOOK_SCRIPT = `on run
+  set sep to (character id 30)
+  set rs to (character id 31)
+  set out to ""
+  tell application "Microsoft Outlook"
+    set picked to selected objects
+    repeat with m in picked
+      try
+        set s to subject of m
+        if s is missing value then set s to ""
+        set f to ""
+        try
+          set snd to sender of m
+          set f to (name of snd) & " <" & (address of snd) & ">"
+        end try
+        set d to ""
+        try
+          set d to (time received of m) as string
+        end try
+        set b to ""
+        try
+          set b to plain text content of m
+          if b is missing value then set b to ""
+        end try
+        set out to out & s & sep & f & sep & d & sep & b & rs
+      end try
+    end repeat
+  end tell
+  return out
+end run
+`;
+
+async function outlookSelection() {
+  const result = await runScript(OUTLOOK_SCRIPT, 'outlook.applescript');
+  if (!result.ok) return result;
+  const mails = result.stdout.replace(/\n$/, '').split('\u001f').filter((record) => record.trim()).map((record) => {
+    const [subject, from, date, ...body] = record.split('\u001e');
+    return { subject, from, date, body: body.join('\u001e') };
+  });
+  return mails.length ? { ok: true, mails } : { ok: false, error: 'keine Auswahl' };
 }
 
 function readEml(file) {
   // Eingelöste Versprechen dürfen jeden Namen haben, sonst nur .eml.
-  const promised = typeof file === 'string' && path.resolve(file).startsWith(mailDrops() + path.sep);
+  // macOS meldet Pfade teils über /private (/var → /private/var): beide Seiten auflösen.
+  const real = (target) => { try { return fs.realpathSync(target); } catch { return path.resolve(target); } };
+  const promised = typeof file === 'string' && real(file).startsWith(real(mailDrops()) + path.sep);
   if (typeof file !== 'string' || !(promised || /\.eml$/i.test(file))) return { ok: false, error: 'not an eml file' };
   try {
     if (fs.statSync(file).size > 30 * 1024 * 1024) return { ok: false, error: 'too large' };
@@ -1090,6 +1161,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('calendar', (_event, command, input) => calendarCall(command, input));
     ipcMain.handle('mail:apple', (event, messageId) => (main && event.sender === main.webContents ? appleMailMessage(messageId) : { ok: false }));
     ipcMain.handle('mail:drag', (event) => (main && event.sender === main.webContents ? dragPasteboard() : { ok: false }));
+    ipcMain.handle('mail:outlook', (event) => (main && event.sender === main.webContents ? outlookSelection() : { ok: false }));
     ipcMain.handle('mail:promised', (event) => (main && event.sender === main.webContents ? promisedMails() : { ok: false }));
     ipcMain.handle('mail:read-eml', (event, file) => (main && event.sender === main.webContents ? readEml(file) : { ok: false }));
     ipcMain.handle('claude:available', () => claudeBinary() !== null);
